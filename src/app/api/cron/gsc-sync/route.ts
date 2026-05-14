@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/db'
 import { workspaces } from '@/db/schema'
 import { eq } from 'drizzle-orm'
-import { syncGscData } from '@/lib/cron-tasks'
+import { syncGscDataTask } from '@/lib/cron-tasks'
 
 export const maxDuration = 120
 
@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
 
     for (const workspace of workspacesWithSync) {
       try {
-        await syncGscData(workspace.id, workspace.gscSiteUrl!)
+        await syncGscDataTask(workspace.id, workspace.gscSiteUrl!)
         successCount++
       } catch (error) {
         console.error(`[Cron:GSC] Failed for workspace ${workspace.id}:`, error)
