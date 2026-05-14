@@ -1,0 +1,18 @@
+# SEOMaster Worker - Standalone BullMQ Worker
+# Build: docker build -t seomaster-worker -f Dockerfile.worker .
+# Run: docker run -e DATABASE_URL=... -e REDIS_URL=... seomaster-worker
+
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci --only=production
+
+COPY . .
+RUN npx tsc --noEmit || true
+
+ENV NODE_ENV=production
+ENV WORKER_CONCURRENCY=2
+
+CMD ["npm", "run", "worker"]

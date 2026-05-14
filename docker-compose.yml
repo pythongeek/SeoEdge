@@ -1,0 +1,173 @@
+# ═══════════════════════════════════════════════════════════════════
+# SEOMaster - Full Stack Docker Compose
+# Includes: Next.js app, Redis, PostgreSQL, Worker
+# ═══════════════════════════════════════════════════════════════════
+
+version: "3.8"
+
+services:
+  # ─── PostgreSQL Database ──────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: seomaster-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: seomaster
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-seomaster_dev_password}
+      POSTGRES_DB: seomaster
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seomaster"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - seomaster-network
+
+  # ─── Redis Cache & Queue ──────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: seomaster-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - seomaster-network
+
+  # ─── Next.js Application ──────────────────────────────────────────
+  app:
+    build:
+      context: .
+      target: runner
+      dockerfile: Dockerfile
+    container_name: seomaster-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Database
+      DATABASE_URL: postgresql://seomaster:${DB_PASSWORD:-seomaster_dev_password}@postgres:5432/seomaster?sslmode=disable
+
+      # Redis
+      REDIS_URL: redis://redis:6379
+
+      # AI: MiniMax M2.7 Direct API
+      MINIMAX_AUTH_TOKEN: ${MINIMAX_AUTH_TOKEN:-}
+      MINIMAX_BASE_URL: ${MINIMAX_BASE_URL:-https://api.minimax.chat/v1}
+
+      # AI: Gemini Fallback
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+
+      # Auth: Clerk
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+
+      # App URL
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+
+      # Stripe
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      NEXT_PUBLIC_STRIPE_PRO_PRICE_ID: ${NEXT_PUBLIC_STRIPE_PRO_PRICE_ID:-}
+      NEXT_PUBLIC_STRIPE_BUSINESS_PRICE_ID: ${NEXT_PUBLIC_STRIPE_BUSINESS_PRICE_ID:-}
+
+      # Security
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-your-32-char-encryption-key-here!!}
+      CRON_SECRET: ${CRON_SECRET:-dev-cron-secret-change-in-production}
+
+      # GSC OAuth
+      GSC_CLIENT_ID: ${GSC_CLIENT_ID:-}
+      GSC_CLIENT_SECRET: ${GSC_CLIENT_SECRET:-}
+      GSC_REDIRECT_URI: ${GSC_REDIRECT_URI:-http://localhost:3000/api/gsc/oauth?action=callback}
+
+      # Observability (optional)
+      NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+      NEXT_PUBLIC_POSTHOG_KEY: ${NEXT_PUBLIC_POSTHOG_KEY:-}
+
+      # Worker
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - seomaster-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ─── Background Worker ────────────────────────────────────────────
+  worker:
+    build:
+      context: .
+      target: worker
+      dockerfile: Dockerfile
+    container_name: seomaster-worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://seomaster:${DB_PASSWORD:-seomaster_dev_password}@postgres:5432/seomaster?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      MINIMAX_AUTH_TOKEN: ${MINIMAX_AUTH_TOKEN:-}
+      MINIMAX_BASE_URL: ${MINIMAX_BASE_URL:-https://api.minimax.chat/v1}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-your-32-char-encryption-key-here!!}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_healthy
+    networks:
+      - seomaster-network
+
+  # ─── Cron Scheduler ───────────────────────────────────────────────
+  # Runs the node-cron scheduler as a separate service
+  cron:
+    build:
+      context: .
+      target: runner
+      dockerfile: Dockerfile
+    container_name: seomaster-cron
+    restart: unless-stopped
+    command: ["npx", "tsx", "scripts/cron-runner.ts"]
+    environment:
+      DATABASE_URL: postgresql://seomaster:${DB_PASSWORD:-seomaster_dev_password}@postgres:5432/seomaster?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      MINIMAX_AUTH_TOKEN: ${MINIMAX_AUTH_TOKEN:-}
+      MINIMAX_BASE_URL: ${MINIMAX_BASE_URL:-https://api.minimax.chat/v1}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      CRON_SECRET: ${CRON_SECRET:-dev-cron-secret}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-your-32-char-encryption-key-here!!}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - seomaster-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  seomaster-network:
+    driver: bridge

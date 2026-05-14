@@ -1,0 +1,25 @@
+name: SEOMaster Cron Jobs
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+  workflow_dispatch:
+
+jobs:
+  process-jobs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Process scheduled jobs
+        run: |
+          curl -sS -X GET "${{ secrets.APP_URL }}/api/cron" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            || echo "Cron endpoint unavailable"
+
+  reset-monthly-usage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reset monthly token usage
+        run: |
+          curl -sS -X GET "${{ secrets.APP_URL }}/api/cron?action=reset" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            || echo "Reset endpoint unavailable"

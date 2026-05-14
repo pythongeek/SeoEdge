@@ -1,0 +1,16 @@
+node_modules
+npm-debug.log
+.env.local
+.env
+.next
+*.md
+dist
+.git
+.github
+coverage
+.vscode
+.idea
+*.test.ts
+*.test.tsx
+tests/
+__tests__/
