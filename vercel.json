@@ -1,0 +1,25 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "installCommand": "npm install --legacy-peer-deps",
+  "framework": "nextjs",
+  "regions": ["sin1"],
+  "functions": {
+    "src/app/api/**/*.ts": {
+      "memory": 1024,
+      "maxDuration": 30
+    },
+    "src/app/api/ai/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/v1/analyze/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/jobs/**/route.ts": {
+      "maxDuration": 120
+    },
+    "src/app/api/cron/**/route.ts": {
+      "maxDuration": 120
+    }
+  }
+}
