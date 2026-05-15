@@ -6,7 +6,7 @@
 import { db } from "@/db";
 import { scheduledReports, workspaces, jobs } from "@/db/schema";
 import { eq, and, lte, lt } from "drizzle-orm";
-import { enqueueJob } from "./job-queue";
+import { enqueueJob } from "./queue-adapter";
 import { sql } from "drizzle-orm";
 
 // ─── Process Scheduled Reports ────────────────────────────────────────
@@ -29,12 +29,11 @@ export async function processScheduledReportsTask() {
   for (const report of dueReports) {
     try {
       // Enqueue analysis job
-      await enqueueJob(
-        "scheduled_report",
-        report.workspaceId,
-        { reportId: report.id, format: report.format, recipients: report.recipients },
-        { priority: 3 }
-      );
+      await enqueueJob({
+        type: "scheduled_report",
+        workspaceId: String(report.workspaceId),
+        payload: { reportId: report.id, format: report.format, recipients: report.recipients },
+      });
 
       // Calculate next run date
       const nextRun = new Date();
@@ -79,6 +78,9 @@ export async function syncGscDataTask() {
 
   console.log(`[CronTask] Found ${syncWorkspaces.length} workspaces to sync GSC data`);
 
+  let success = 0;
+  let errors = 0;
+
   for (const ws of syncWorkspaces) {
     try {
       const syncFrequency = ws.settings?.syncFrequency || "daily";
@@ -98,22 +100,25 @@ export async function syncGscDataTask() {
       }
 
       // Enqueue GSC sync job
-      await enqueueJob(
-        "gsc_analysis",
-        ws.id,
-        {
+      await enqueueJob({
+        type: "gsc_analysis",
+        workspaceId: String(ws.id),
+        payload: {
           siteUrl: ws.gscSiteUrl,
           dateRange: "28d",
           triggerAnalysis: true,
         },
-        { priority: 2 }
-      );
+      });
 
+      success++;
       console.log(`[CronTask] Enqueued GSC sync for workspace ${ws.id}`);
     } catch (e: any) {
+      errors++;
       console.error(`[CronTask] GSC sync failed for workspace ${ws.id}:`, e.message);
     }
   }
+
+  return { success, errors, count: syncWorkspaces.length };
 }
 
 // ─── Cleanup Old Jobs ─────────────────────────────────────────────────
@@ -178,15 +183,14 @@ export async function generateWeeklyDigestTask() {
 
   for (const ws of workspacesList) {
     try {
-      await enqueueJob(
-        "scheduled_report",
-        ws.id,
-        {
+      await enqueueJob({
+        type: "scheduled_report",
+        workspaceId: String(ws.id),
+        payload: {
           type: "weekly_digest",
           format: "email",
         },
-        { priority: 2 }
-      );
+      });
 
       console.log(`[CronTask] Weekly digest enqueued for workspace ${ws.id}`);
     } catch (e: any) {

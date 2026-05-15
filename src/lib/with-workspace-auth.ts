@@ -25,21 +25,60 @@ interface AuthOptions {
 // ─── Workspace Resolution ─────────────────────────────────────────────
 
 async function resolveWorkspace(userId: string) {
-  // Find or create workspace for user
-  let [ws] = await db
+  // Find user by clerkUserId, then get their workspace via workspaceMembers
+  let ws = null;
+
+  // First try: find user by clerkUserId
+  const { users, workspaceMembers } = await import("@/db/schema");
+  const { eq } = await import("drizzle-orm");
+
+  const [user] = await db
     .select()
-    .from(workspaces)
-    .where(eq(workspaces.ownerId, userId))
+    .from(users)
+    .where(eq(users.clerkUserId, userId))
     .limit(1);
+
+  if (user) {
+    // Get user's workspaces via workspaceMembers (prefer default workspace)
+    const memberships = await db
+      .select({ workspaceId: workspaceMembers.workspaceId })
+      .from(workspaceMembers)
+      .where(eq(workspaceMembers.userId, user.id))
+      .orderBy(workspaceMembers.createdAt)
+      .limit(10);
+
+    if (memberships.length > 0) {
+      // Use default workspace or first membership
+      const targetWorkspaceId = user.defaultWorkspaceId || memberships[0].workspaceId;
+      [ws] = await db
+        .select()
+        .from(workspaces)
+        .where(eq(workspaces.id, targetWorkspaceId))
+        .limit(1);
+    }
+  }
 
   if (!ws) {
     // Auto-create workspace on first API call
+    // First create the user if they don't exist
+    let userRecord = user;
+    if (!userRecord) {
+      [userRecord] = await db
+        .insert(users)
+        .values({
+          clerkUserId: userId,
+          email: `user-${userId}@clerk.local`,
+          name: "Auto-created User",
+        })
+        .returning();
+    }
+
+    // Create default workspace
     const [newWs] = await db
       .insert(workspaces)
       .values({
         name: "Default Workspace",
         slug: `workspace-${Date.now()}`,
-        ownerId: userId,
         tier: "free",
         tokensUsedThisMonth: 0,
         apiRequestsThisMonth: 0,
@@ -48,6 +87,13 @@ async function resolveWorkspace(userId: string) {
       })
       .returning();
     ws = newWs;
+
+    // Add user as owner member
+    await db.insert(workspaceMembers).values({
+      workspaceId: ws.id,
+      userId: userRecord.id,
+      role: "owner",
+    });
   }
 
   return ws;
@@ -60,23 +106,40 @@ async function authenticateByApiKey(req: NextRequest): Promise<{ workspaceId: nu
   if (!apiKey) return null;
 
   try {
-    // Hash the API key for lookup
     const { hashApiKey } = await import("./crypto-utils");
     const hashedKey = hashApiKey(apiKey);
 
+    // Look up in apiKeys table (not workspaces)
+    const { apiKeys } = await import("@/db/schema");
+    const { eq, and } = await import("drizzle-orm");
+
+    const [keyRecord] = await db
+      .select({ workspaceId: apiKeys.workspaceId })
+      .from(apiKeys)
+      .where(
+        and(
+          eq(apiKeys.hashedKey, hashedKey),
+          eq(apiKeys.isActive, true)
+        )
+      )
+      .limit(1);
+
+    if (!keyRecord) return null;
+
+    // Get workspace
     const [ws] = await db
-      .select()
+      .select({ id: workspaces.id, tier: workspaces.tier })
       .from(workspaces)
-      .where(eq(workspaces.apiKey, hashedKey))
+      .where(eq(workspaces.id, keyRecord.workspaceId))
       .limit(1);
 
     if (!ws) return null;
 
     // Update last used
     await db
-      .update(workspaces)
-      .set({ updatedAt: new Date() })
-      .where(eq(workspaces.id, ws.id));
+      .update(apiKeys)
+      .set({ lastUsedAt: new Date() })
+      .where(eq(apiKeys.workspaceId, keyRecord.workspaceId));
 
     return { workspaceId: ws.id, tier: ws.tier || "free" };
   } catch {

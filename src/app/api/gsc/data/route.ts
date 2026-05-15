@@ -9,7 +9,7 @@ import { db } from "@/db";
 import { workspaces, gscData, jobs } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { fetchSearchAnalytics, getDateRange, decryptTokenForUse } from "@/lib/gsc-fetcher";
-import { enqueueJob } from "@/lib/job-queue";
+import { enqueueJob } from "@/lib/queue-adapter";
 import { z } from "zod";
 
 const fetchSchema = z.object({
@@ -88,12 +88,11 @@ export async function POST(req: NextRequest) {
     // Trigger background analysis
     let jobId: string | undefined;
     if (triggerAnalysis) {
-      jobId = await enqueueJob(
-        "gsc_analysis",
-        workspaceId,
-        { gscData: rows.slice(0, 1000), siteUrl },
-        { priority: 5 }
-      );
+      jobId = await enqueueJob({
+        type: "gsc_analysis",
+        workspaceId: String(workspaceId),
+        payload: { gscData: rows.slice(0, 1000), siteUrl },
+      });
     }
 
     return NextResponse.json({

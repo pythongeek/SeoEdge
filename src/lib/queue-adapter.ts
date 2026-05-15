@@ -12,6 +12,7 @@ import { Client, Receiver } from '@upstash/qstash'
 
 export const qstash = new Client({
   token: process.env.QSTASH_TOKEN!,
+  baseUrl: process.env.QSTASH_URL || 'https://qstash.upstash.io',
 })
 
 // ─── QStash Receiver (for consuming webhooks) ─────────────────────────
@@ -31,6 +32,12 @@ export type JobType =
   | 'export'
   | 'scheduled_report'
   | 'full_audit'
+  | 'ctr_analysis'
+  | 'cannibalization'
+  | 'serp_analysis'
+  | 'trend_analysis'
+  | 'topic_clusters'
+  | 'geo_risk'
 
 export interface QueuedJob<T = unknown> {
   type: JobType
@@ -82,6 +89,30 @@ export async function enqueueFullAudit(params: {
       siteUrl: params.siteUrl,
       agents: params.agents ?? ['seo_analyst', 'content_strategist', 'technical_auditor', 'geo_specialist'],
     },
+  })
+}
+
+// ─── Enqueue convenience wrappers (Backwards compatible) ─────────────
+
+export async function enqueueGscAnalysis(
+  workspaceId: number,
+  payload: Record<string, any>
+): Promise<{ messageId: string }> {
+  return enqueueJob({
+    type: 'gsc_analysis',
+    workspaceId: String(workspaceId),
+    payload,
+  })
+}
+
+export async function enqueueScheduledReport(
+  workspaceId: number,
+  payload: Record<string, any>
+): Promise<{ messageId: string }> {
+  return enqueueJob({
+    type: 'scheduled_report',
+    workspaceId: String(workspaceId),
+    payload,
   })
 }
 

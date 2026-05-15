@@ -1,13 +1,13 @@
 /**
- * Cron API - GitHub Actions / cron-jobs.org compatible
- * Processes scheduled jobs and reports
+ * Cron API - Legacy manual trigger endpoint
+ * (Used by GitHub Actions cron, not cron-job.org)
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { jobs, scheduledReports, workspaces } from "@/db/schema";
+import { scheduledReports, workspaces } from "@/db/schema";
 import { eq, and, lte } from "drizzle-orm";
-import { enqueueJob } from "@/lib/job-queue";
+import { enqueueJob } from "@/lib/queue-adapter";
 
 export async function GET(req: NextRequest) {
   // Verify cron secret
@@ -20,7 +20,6 @@ export async function GET(req: NextRequest) {
 
   const results = {
     scheduledJobs: 0,
-    expiredSubscriptions: 0,
     tokensReset: 0,
   };
 
@@ -37,11 +36,11 @@ export async function GET(req: NextRequest) {
       );
 
     for (const report of dueReports) {
-      await enqueueJob(
-        "scheduled_report",
-        report.workspaceId,
-        { reportId: report.id, format: report.format }
-      );
+      await enqueueJob({
+        type: "scheduled_report",
+        workspaceId: String(report.workspaceId),
+        payload: { reportId: report.id, format: report.format },
+      });
 
       // Update next run
       const nextRun = new Date();
@@ -59,7 +58,7 @@ export async function GET(req: NextRequest) {
       results.scheduledJobs++;
     }
 
-    // 2. Reset monthly token usage
+    // 2. Reset monthly token usage (1st of month)
     const now = new Date();
     if (now.getDate() === 1) {
       await db

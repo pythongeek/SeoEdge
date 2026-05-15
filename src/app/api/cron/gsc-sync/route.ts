@@ -4,9 +4,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/db'
-import { workspaces } from '@/db/schema'
-import { eq } from 'drizzle-orm'
 import { syncGscDataTask } from '@/lib/cron-tasks'
 
 export const maxDuration = 120
@@ -23,34 +20,14 @@ export async function GET(request: NextRequest) {
   const startTime = Date.now()
 
   try {
-    // Get all workspaces with auto-sync enabled
-    const workspacesWithSync = await db
-      .select()
-      .from(workspaces)
-      .where(eq(workspaces.gscAutoSync, true))
-
-    console.log(`[Cron:GSC] Syncing ${workspacesWithSync.length} workspaces`)
-
-    let successCount = 0
-    let errorCount = 0
-
-    for (const workspace of workspacesWithSync) {
-      try {
-        await syncGscDataTask(workspace.id, workspace.gscSiteUrl!)
-        successCount++
-      } catch (error) {
-        console.error(`[Cron:GSC] Failed for workspace ${workspace.id}:`, error)
-        errorCount++
-      }
-    }
-
+    const result = await syncGscDataTask()
     const duration = Date.now() - startTime
 
     return NextResponse.json({
-      success: errorCount === 0,
-      message: `GSC sync completed: ${successCount} success, ${errorCount} errors`,
+      success: true,
+      message: `GSC sync completed: ${result.success} success, ${result.errors} errors`,
       durationMs: duration,
-      workspaceCount: workspacesWithSync.length,
+      workspaceCount: result.count,
     })
   } catch (error: any) {
     const duration = Date.now() - startTime
