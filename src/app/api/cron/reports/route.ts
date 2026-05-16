@@ -4,10 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/db'
-import { scheduledReports } from '@/db/schema'
-import { eq, and, lte } from 'drizzle-orm'
-import { enqueueJob } from '@/lib/queue-adapter'
+import { processScheduledReportsTask } from '@/lib/cron-tasks'
 
 export const maxDuration = 120
 
@@ -23,65 +20,14 @@ export async function GET(request: NextRequest) {
   const startTime = Date.now()
 
   try {
-    const now = new Date()
-
-    const dueReports = await db
-      .select()
-      .from(scheduledReports)
-      .where(
-        and(
-          eq(scheduledReports.isActive, true),
-          lte(scheduledReports.nextRunAt, now)
-        )
-      )
-
-    console.log(`[Cron:Reports] Found ${dueReports.length} reports to process`)
-
-    let enqueuedCount = 0
-
-    for (const report of dueReports) {
-      try {
-        // Enqueue report generation job
-        await enqueueJob({
-          type: 'scheduled_report',
-          workspaceId: report.workspaceId,
-          payload: {
-            reportId: report.id,
-            format: report.format,
-            recipients: report.recipients,
-          },
-        })
-
-        // Calculate next run date
-        const nextRun = new Date()
-        if (report.frequency === 'weekly') {
-          nextRun.setDate(nextRun.getDate() + 7)
-        } else if (report.frequency === 'monthly') {
-          nextRun.setMonth(nextRun.getMonth() + 1)
-        } else {
-          nextRun.setDate(nextRun.getDate() + 7)
-        }
-
-        await db
-          .update(scheduledReports)
-          .set({
-            lastRunAt: now,
-            nextRunAt: nextRun,
-          })
-          .where(eq(scheduledReports.id, report.id))
-
-        enqueuedCount++
-      } catch (error) {
-        console.error(`[Cron:Reports] Failed to process report ${report.id}:`, error)
-      }
-    }
-
+    const result = await processScheduledReportsTask()
     const duration = Date.now() - startTime
 
     return NextResponse.json({
       success: true,
-      message: `Enqueued ${enqueuedCount} reports`,
-      totalFound: dueReports.length,
+      message: `Reports processed`,
+      processed: result.processed,
+      errors: result.errors,
       durationMs: duration,
     })
   } catch (error: any) {

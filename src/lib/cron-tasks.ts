@@ -6,8 +6,6 @@
 import { db } from "@/db";
 import { scheduledReports, workspaces, jobs } from "@/db/schema";
 import { eq, and, lte, lt } from "drizzle-orm";
-import { enqueueJob } from "./queue-adapter";
-import { sql } from "drizzle-orm";
 
 // ─── Process Scheduled Reports ────────────────────────────────────────
 
@@ -26,13 +24,29 @@ export async function processScheduledReportsTask() {
 
   console.log(`[CronTask] Found ${dueReports.length} scheduled reports to process`);
 
+  let processed = 0;
+  let errors = 0;
+
   for (const report of dueReports) {
     try {
-      // Enqueue analysis job
-      await enqueueJob({
+      // Run report generation directly (synchronous, within Vercel 120s limit)
+      const { executeActionV2 } = await import("@/lib/action-router-v2");
+
+      const { result, tokensUsed } = await executeActionV2(
+        "full_audit",
+        {},
+        report.workspaceId
+      );
+
+      // Save report
+      await db.insert(reports).values({
+        workspaceId: report.workspaceId,
+        title: `Scheduled Report - ${new Date().toISOString().split("T")[0]}`,
         type: "scheduled_report",
-        workspaceId: String(report.workspaceId),
-        payload: { reportId: report.id, format: report.format, recipients: report.recipients },
+        summary: result.summary || "Scheduled report generated",
+        actions: result.prioritizedActions || [],
+        opportunities: result.opportunities || [],
+        aiTokensUsed: tokensUsed,
       });
 
       // Calculate next run date
@@ -42,7 +56,6 @@ export async function processScheduledReportsTask() {
       } else if (report.frequency === "monthly") {
         nextRun.setMonth(nextRun.getMonth() + 1);
       } else {
-        // Default to weekly
         nextRun.setDate(nextRun.getDate() + 7);
       }
 
@@ -54,12 +67,20 @@ export async function processScheduledReportsTask() {
         })
         .where(eq(scheduledReports.id, report.id));
 
-      console.log(`[CronTask] Scheduled report ${report.id} enqueued, next run: ${nextRun.toISOString()}`);
+      processed++;
+      console.log(`[CronTask] Report ${report.id} generated, next run: ${nextRun.toISOString()}`);
     } catch (e: any) {
+      errors++;
       console.error(`[CronTask] Failed to process report ${report.id}:`, e.message);
     }
   }
+
+  return { processed, errors, total: dueReports.length };
 }
+
+// ─── Sync GSC Data ────────────────────────────────────────────────────
+
+import { sql } from "drizzle-orm";
 
 // ─── Sync GSC Data ────────────────────────────────────────────────────
 
@@ -79,6 +100,7 @@ export async function syncGscDataTask() {
   console.log(`[CronTask] Found ${syncWorkspaces.length} workspaces to sync GSC data`);
 
   let success = 0;
+  let skipped = 0;
   let errors = 0;
 
   for (const ws of syncWorkspaces) {
@@ -96,29 +118,34 @@ export async function syncGscDataTask() {
         syncFrequency === "hourly" && hoursSinceSync >= 1;
 
       if (!shouldSync) {
+        skipped++;
         continue;
       }
 
-      // Enqueue GSC sync job
-      await enqueueJob({
-        type: "gsc_analysis",
-        workspaceId: String(ws.id),
-        payload: {
-          siteUrl: ws.gscSiteUrl,
-          dateRange: "28d",
-          triggerAnalysis: true,
-        },
-      });
+      // Run GSC analysis directly (synchronous within Vercel 120s limit)
+      const { executeActionV2 } = await import("@/lib/action-router-v2");
+
+      await executeActionV2(
+        "gsc_analysis",
+        { siteUrl: ws.gscSiteUrl, dateRange: "28d" },
+        ws.id
+      );
+
+      // Update workspace timestamp
+      await db
+        .update(workspaces)
+        .set({ updatedAt: new Date() })
+        .where(eq(workspaces.id, ws.id));
 
       success++;
-      console.log(`[CronTask] Enqueued GSC sync for workspace ${ws.id}`);
+      console.log(`[CronTask] GSC sync completed for workspace ${ws.id}`);
     } catch (e: any) {
       errors++;
       console.error(`[CronTask] GSC sync failed for workspace ${ws.id}:`, e.message);
     }
   }
 
-  return { success, errors, count: syncWorkspaces.length };
+  return { success, skipped, errors, count: syncWorkspaces.length };
 }
 
 // ─── Cleanup Old Jobs ─────────────────────────────────────────────────
@@ -183,16 +210,15 @@ export async function generateWeeklyDigestTask() {
 
   for (const ws of workspacesList) {
     try {
-      await enqueueJob({
-        type: "scheduled_report",
-        workspaceId: String(ws.id),
-        payload: {
-          type: "weekly_digest",
-          format: "email",
-        },
-      });
+      const { executeActionV2 } = await import("@/lib/action-router-v2");
 
-      console.log(`[CronTask] Weekly digest enqueued for workspace ${ws.id}`);
+      await executeActionV2(
+        "full_audit",
+        {},
+        ws.id
+      );
+
+      console.log(`[CronTask] Weekly digest generated for workspace ${ws.id}`);
     } catch (e: any) {
       console.error(`[CronTask] Weekly digest failed for workspace ${ws.id}:`, e.message);
     }
